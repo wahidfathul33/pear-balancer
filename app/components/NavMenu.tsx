@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const MENU_ITEMS = [
   { href: "/", label: "Generate Jadwal" },
   { href: "/logbook", label: "Generate Logbook" },
+  { href: "/uraian-jadwal", label: "Generate Uraian Jadwal" },
 ];
 
 export function NavMenu() {
