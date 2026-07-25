@@ -23,7 +23,7 @@ export function loadAiConfigFromEnv(): AiConfig {
   if (!apiKey) {
     throw new Error("AI_API_KEY belum di-set di .env (kredensial endpoint AI)");
   }
-  const model = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+  const model = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || "openai/gpt-5.6-terra";
 
   // OpenRouter-specific attribution headers; harmless to omit for other
   // providers, so only send them when explicitly configured.

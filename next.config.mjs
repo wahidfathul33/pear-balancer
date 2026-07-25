@@ -1,7 +1,7 @@
 
-
 const nextConfig = {
-  /* config options here */
+  poweredByHeader: false,
+  reactStrictMode: true,
 };
 
 export default nextConfig;

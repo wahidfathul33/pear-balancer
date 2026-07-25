@@ -1,6 +1,6 @@
 import { KETERANGAN_MAP } from "./data";
 import { fetchFileChanges, loadGitlabConfigFromEnv, GitFileChange } from "./gitlab";
-import { chatComplete, loadAiConfigFromEnv, ChatMessage } from "./ai-client";
+import { chatComplete, loadAiConfigFromEnv, ChatMessage, AiConfig } from "./ai-client";
 
 /** id 5090 (backup) is excluded from AI-generated logbook classification. */
 const DEFAULT_EXCLUDED_IDS = [5090];
@@ -107,7 +107,7 @@ export function buildLogbookUnits(
   return units;
 }
 
-function buildAllowedKeteranganMap(excludedIds: number[]): Record<number, string> {
+export function buildAllowedKeteranganMap(excludedIds: number[]): Record<number, string> {
   const allowed: Record<number, string> = {};
   for (const [idStr, text] of Object.entries(KETERANGAN_MAP)) {
     const id = Number(idStr);
@@ -121,7 +121,7 @@ function buildAllowedKeteranganMap(excludedIds: number[]): Record<number, string
  * category based on what the diff actually shows instead of defaulting to
  * whichever id it saw most recently.
  */
-const CATEGORY_CRITERIA: Record<number, string> = {
+export const CATEGORY_CRITERIA: Record<number, string> = {
   540: "Perencanaan/perancangan SEBELUM implementasi — dokumen rencana, desain, atau proposal fitur. Pilih ini HANYA jika diff berisi dokumen perencanaan/desain, BUKAN kode.",
   5088: "Mengoperasikan sistem yang sudah ada — menjalankan/memantau tools operasional (mis. memantau log Sentry, menjalankan sinkronisasi data terjadwal, menelusuri masalah akun/login user). Bukan mengubah kode aplikasi.",
   5089: "Melakukan pengetesan/evaluasi atas perubahan yang sudah dibuat — menguji query, endpoint, atau alur untuk memastikan hasilnya sesuai ekspektasi. Fokus pada VERIFIKASI hasil, bukan menulis kode baru.",
@@ -217,7 +217,7 @@ function stripFence(text: string): string {
 }
 
 /** Parses `{"entries": [...]}` , tolerating a bare `[...]` array as a fallback for models/providers that ignore the object-schema instruction. */
-function extractEntriesArray(text: string): unknown[] {
+export function extractEntriesArray(text: string): unknown[] {
   const candidate = stripFence(text);
 
   const objStart = candidate.indexOf("{");
@@ -248,6 +248,59 @@ function extractEntriesArray(text: string): unknown[] {
 
   const preview = text.slice(0, 400);
   throw new Error(`Respons AI tidak mengandung JSON yang valid. Cuplikan respons: ${preview}`);
+}
+
+export interface ClassifiedUnit {
+  id: number;
+  deskripsi: string;
+  deskripsiPengetesan?: string;
+}
+
+/**
+ * Sends `units` to the AI for classification into one KETERANGAN_MAP id each,
+ * with a matching one-sentence description. Returns one ClassifiedUnit per
+ * input unit, in the same order.
+ */
+export async function classifyUnits(
+  units: LogbookUnit[],
+  allowedMap: Record<number, string>,
+  aiConfig: AiConfig
+): Promise<ClassifiedUnit[]> {
+  if (units.length === 0) return [];
+
+  const messages = buildPrompt(units, allowedMap);
+
+  let raw: string;
+  try {
+    // Ask the provider to enforce valid JSON output where supported — this
+    // eliminates most stray-prose/markdown-fence parsing failures outright.
+    raw = await chatComplete(aiConfig, messages, { jsonObject: true });
+  } catch {
+    // Some models/providers reject the response_format param entirely;
+    // retry without it and rely on the tolerant extractor below.
+    raw = await chatComplete(aiConfig, messages);
+  }
+
+  const parsed = extractEntriesArray(raw) as Array<{
+    tanggal?: string;
+    id?: number;
+    deskripsi?: string;
+    deskripsi_pengetesan?: string;
+  }>;
+
+  return units.map((unit, idx) => {
+    const item = parsed[idx];
+    const id = item?.id !== undefined && allowedMap[item.id] ? item.id : fallbackId(allowedMap);
+    const baseDeskripsi = item?.deskripsi?.trim() || `Perubahan pada ${unit.files.join(", ")}`;
+    return {
+      id,
+      // Raw description, WITHOUT the app-name suffix — callers decide
+      // whether/how to append it (e.g. generateLogbook appends it once per
+      // entry, including the derived testing companion entry).
+      deskripsi: baseDeskripsi,
+      deskripsiPengetesan: item?.deskripsi_pengetesan?.trim(),
+    };
+  });
 }
 
 export interface GenerateLogbookOptions {
@@ -291,32 +344,12 @@ export async function generateLogbook(
   }
 
   const units = buildLogbookUnits(changes, smallChangeThreshold);
-  const messages = buildPrompt(units, allowedMap);
-
-  let raw: string;
-  try {
-    // Ask the provider to enforce valid JSON output where supported — this
-    // eliminates most stray-prose/markdown-fence parsing failures outright.
-    raw = await chatComplete(aiConfig, messages, { jsonObject: true });
-  } catch {
-    // Some models/providers reject the response_format param entirely;
-    // retry without it and rely on the tolerant extractor below.
-    raw = await chatComplete(aiConfig, messages);
-  }
-
-  const parsed = extractEntriesArray(raw) as Array<{
-    tanggal?: string;
-    id?: number;
-    deskripsi?: string;
-    deskripsi_pengetesan?: string;
-  }>;
+  const classified = await classifyUnits(units, allowedMap, aiConfig);
 
   const entries: LogbookEntry[] = [];
   units.forEach((unit, idx) => {
-    const item = parsed[idx];
-    const id = item?.id !== undefined && allowedMap[item.id] ? item.id : fallbackId(allowedMap);
-    const baseDeskripsi = item?.deskripsi?.trim() || `Perubahan pada ${unit.files.join(", ")}`;
-    const tanggal = item?.tanggal || unit.tanggal;
+    const { id, deskripsi: baseDeskripsi, deskripsiPengetesan } = classified[idx];
+    const tanggal = unit.tanggal;
 
     entries.push({
       tanggal,
@@ -331,7 +364,7 @@ export async function generateLogbook(
     // pengetesan diambil dari penjelasan AI (spesifik per fitur), bukan
     // kalimat generik yang hanya menyebut nama file.
     if (id === MAINTENANCE_ID && allowedMap[TESTING_ID]) {
-      const testingDeskripsi = item?.deskripsi_pengetesan?.trim() || deriveTestingDeskripsi(baseDeskripsi);
+      const testingDeskripsi = deskripsiPengetesan || deriveTestingDeskripsi(baseDeskripsi);
       entries.push({
         tanggal,
         id: TESTING_ID,
