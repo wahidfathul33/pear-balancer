@@ -66,6 +66,17 @@ function tryParseSseBody(body: string): string | null {
   return sawAny ? content : null;
 }
 
+/**
+ * True when an error thrown by `chatComplete` is a 4xx (the request itself
+ * was rejected — e.g. an unsupported `response_format`). Only a 4xx is worth
+ * retrying without the offending param; 5xx/timeout/network failures are not,
+ * since retrying would just pay for a second slow generation for nothing.
+ */
+export function isBadRequestError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /AI endpoint 4\d\d\b/.test(msg);
+}
+
 export async function chatComplete(
   config: AiConfig,
   messages: ChatMessage[],

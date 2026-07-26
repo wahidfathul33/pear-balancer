@@ -1,6 +1,6 @@
 import { KETERANGAN_MAP } from "./data";
 import { fetchFileChanges, loadGitlabConfigFromEnv, GitFileChange } from "./gitlab";
-import { chatComplete, loadAiConfigFromEnv, ChatMessage, AiConfig } from "./ai-client";
+import { chatComplete, loadAiConfigFromEnv, ChatMessage, AiConfig, isBadRequestError } from "./ai-client";
 
 /** id 5090 (backup) is excluded from AI-generated logbook classification. */
 const DEFAULT_EXCLUDED_IDS = [5090];
@@ -272,14 +272,24 @@ export async function classifyUnits(
 
   const messages = buildPrompt(units, allowedMap);
 
+  // Ask the provider to enforce valid JSON output where supported — this
+  // eliminates most stray-prose/markdown-fence parsing failures outright.
+  // Disable via AI_JSON_OBJECT=false for models that don't support the param.
+  const wantJsonObject = process.env.AI_JSON_OBJECT !== "false";
+
   let raw: string;
-  try {
-    // Ask the provider to enforce valid JSON output where supported — this
-    // eliminates most stray-prose/markdown-fence parsing failures outright.
-    raw = await chatComplete(aiConfig, messages, { jsonObject: true });
-  } catch {
-    // Some models/providers reject the response_format param entirely;
-    // retry without it and rely on the tolerant extractor below.
+  if (wantJsonObject) {
+    try {
+      raw = await chatComplete(aiConfig, messages, { jsonObject: true });
+    } catch (err) {
+      // Retry WITHOUT response_format only when the provider explicitly
+      // rejected it (a 4xx) — not on timeouts/network errors, which would
+      // otherwise pay for a second full (slow) generation for nothing. The
+      // tolerant extractor below still handles any stray prose.
+      if (!isBadRequestError(err)) throw err;
+      raw = await chatComplete(aiConfig, messages);
+    }
+  } else {
     raw = await chatComplete(aiConfig, messages);
   }
 
@@ -308,8 +318,8 @@ export async function classifyUnits(
 export interface GenerateLogbookOptions {
   startDate: Date;
   endDate: Date;
-  /** Project refs (ids or paths) picked from the starred-projects dropdown; falls back to GITLAB_PROJECT_IDS from .env if omitted. */
-  projectRefs?: string[];
+  /** Project refs (ids or paths) picked from the starred-projects dropdown. Required — at least one repo must be selected. */
+  projectRefs: string[];
 }
 
 export interface GenerateLogbookResult {

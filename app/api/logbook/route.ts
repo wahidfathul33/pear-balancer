@@ -25,6 +25,9 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+  if (!projectRefs || projectRefs.length === 0) {
+    return NextResponse.json({ error: "Pilih minimal satu repo GitLab" }, { status: 400 });
+  }
 
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);

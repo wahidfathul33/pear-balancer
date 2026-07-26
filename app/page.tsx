@@ -1,16 +1,23 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { PATTERN_1, PATTERN_2, Task } from "@/lib/data";
-import { generateSchedule, ScheduledTask, DaySummary } from "@/lib/scheduler";
+import {
+  DEFAULT_PATTERN_1,
+  DEFAULT_PATTERN_2,
+  PatternRow,
+  clonePattern,
+  expandPattern,
+} from "@/lib/data";
+import { generateSchedule, ScheduledTask, DaySummary, DEFAULT_MAX_BOBOT } from "@/lib/scheduler";
 import { WeekPicker, getMondayOfWeek, getFridayOfWeek } from "@/app/components/WeekPicker";
+import { PatternEditor } from "@/app/components/PatternEditor";
 import { downloadXlsx } from "@/lib/excel";
 
 type PatternKey = "1" | "2";
 
-const PATTERNS: Record<PatternKey, Task[]> = {
-  "1": PATTERN_1,
-  "2": PATTERN_2,
+const DEFAULT_PATTERNS: Record<PatternKey, PatternRow[]> = {
+  "1": DEFAULT_PATTERN_1,
+  "2": DEFAULT_PATTERN_2,
 };
 
 function CopyTanggalButton({ tasks }: { tasks: ScheduledTask[] }) {
@@ -79,6 +86,8 @@ export default function Home() {
   const [startDate, setStartDate] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [endDate, setEndDate] = useState<Date>(() => getFridayOfWeek(new Date()));
   const [pattern, setPattern] = useState<PatternKey>("1");
+  const [patternRows, setPatternRows] = useState<PatternRow[]>(() => clonePattern(DEFAULT_PATTERNS["1"]));
+  const [maxBobot, setMaxBobot] = useState<number>(DEFAULT_MAX_BOBOT);
   const [scheduled, setScheduled] = useState<ScheduledTask[] | null>(null);
   const [daySummaries, setDaySummaries] = useState<DaySummary[] | null>(null);
   const [totalBobot, setTotalBobot] = useState<number>(0);
@@ -88,13 +97,17 @@ export default function Home() {
     setEndDate(end);
   };
 
+  const selectPattern = (key: PatternKey) => {
+    setPattern(key);
+    setPatternRows(clonePattern(DEFAULT_PATTERNS[key]));
+  };
+
   const handleGenerate = useCallback(() => {
-    const tasks = PATTERNS[pattern];
-    const result = generateSchedule(tasks, startDate, endDate);
+    const result = generateSchedule(expandPattern(patternRows), startDate, endDate, maxBobot);
     setScheduled(result.scheduled);
     setDaySummaries(result.daySummaries);
     setTotalBobot(result.totalBobot);
-  }, [startDate, endDate, pattern]);
+  }, [startDate, endDate, patternRows, maxBobot]);
 
   return (
     <main className="min-h-screen bg-slate-200 py-10">
@@ -102,7 +115,7 @@ export default function Home() {
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Generate Jadwal Task</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Distribusi task selama 1 minggu kerja (Senin–Jumat), maks bobot 27.5
+            Distribusi task selama 1 minggu kerja (Senin–Jumat), maks bobot {maxBobot}
           </p>
         </div>
 
@@ -123,7 +136,7 @@ export default function Home() {
                   <button
                     key={p}
                     type="button"
-                    onClick={() => setPattern(p)}
+                    onClick={() => selectPattern(p)}
                     className={[
                       "flex-1 text-sm font-medium transition-colors focus:outline-none",
                       pattern === p
@@ -136,6 +149,15 @@ export default function Home() {
                 ))}
               </div>
             </div>
+          </div>
+          <div className="mt-4">
+            <PatternEditor
+              rows={patternRows}
+              onChange={setPatternRows}
+              onReset={() => setPatternRows(clonePattern(DEFAULT_PATTERNS[pattern]))}
+              maxBobot={maxBobot}
+              onMaxBobotChange={setMaxBobot}
+            />
           </div>
           <div className="mt-4">
             <button
@@ -162,7 +184,7 @@ export default function Home() {
               <div className="text-right">
                 <p className="text-xs text-gray-500 font-medium">Total Bobot</p>
                 <p className="text-2xl font-bold text-gray-800">{totalBobot}</p>
-                <p className="text-xs text-gray-400">maks 27.5</p>
+                <p className="text-xs text-gray-400">maks {maxBobot}</p>
               </div>
             </div>
 

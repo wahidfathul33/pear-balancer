@@ -67,7 +67,7 @@ export function ProjectPicker({
 
   const label =
     selected.length === 0
-      ? "Semua repo (default .env)"
+      ? "Pilih minimal 1 repo"
       : selected.length === 1
       ? selected[0]
       : `${selected.length} repo dipilih`;
@@ -124,7 +124,7 @@ export function ProjectPicker({
               onClick={() => onChange([])}
               className="mt-2 w-full text-xs text-gray-400 hover:text-red-500 transition-colors text-center"
             >
-              Kosongkan pilihan (pakai default .env)
+              Pilih minimal 1 repo
             </button>
           )}
         </div>

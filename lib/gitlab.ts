@@ -9,8 +9,6 @@
 export interface GitlabConfig {
   baseUrl: string;
   token: string;
-  /** Project ids or URL-encoded paths (e.g. "group/subgroup/repo") to scan. */
-  projectRefs: string[];
   authorEmail: string;
 }
 
@@ -46,19 +44,12 @@ export function loadGitlabConfigFromEnv(): GitlabConfig {
   const baseUrl = (process.env.GITLAB_BASE_URL || "https://git.uns.ac.id").replace(/\/+$/, "");
   const token = process.env.GITLAB_TOKEN || "";
   const authorEmail = process.env.GITLAB_AUTHOR_EMAIL || "dihaw@staff.uns.ac.id";
-  // Optional now: projects can instead be picked at generate-time from the
-  // starred-projects dropdown (see listStarredProjects / fetchFileChanges).
-  const rawProjects = process.env.GITLAB_PROJECT_IDS || process.env.GITLAB_PROJECT_ID || "";
-  const projectRefs = rawProjects
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
 
   if (!token) {
     throw new Error("GITLAB_TOKEN belum di-set di .env");
   }
 
-  return { baseUrl, token, projectRefs, authorEmail };
+  return { baseUrl, token, authorEmail };
 }
 
 function encodeProjectRef(ref: string): string {
@@ -116,7 +107,7 @@ interface RawStarredProject {
   path_with_namespace: string;
 }
 
-/** Lists projects starred by the token's owner — used to populate the repo picker dropdown instead of hardcoding GITLAB_PROJECT_IDS. */
+/** Lists projects starred by the token's owner — used to populate the repo picker dropdown the user selects from per generation. */
 export async function listStarredProjects(
   config: Pick<GitlabConfig, "baseUrl" | "token">
 ): Promise<GitlabStarredProject[]> {
@@ -248,35 +239,72 @@ async function getCommitFileChanges(
 }
 
 /**
+ * Runs `fn` over `items` with at most `limit` calls in flight at once,
+ * preserving input order in the result. Used to parallelize GitLab requests
+ * without firing hundreds at the self-hosted server simultaneously.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** Max projects resolved concurrently (name + commit list). */
+const PROJECT_CONCURRENCY = 5;
+/** Max per-commit diff requests in flight at once. */
+const DIFF_CONCURRENCY = 8;
+
+/**
  * Fetch every file-level change authored by `config.authorEmail` across the
- * given projects (or `config.projectRefs` from .env if none are passed)
- * within [since, until]. This is read-only and does not write anything
- * anywhere.
+ * explicitly selected `projectRefs` within [since, until]. At least one repo
+ * must be selected — there is no `.env` fallback. Requests are parallelized
+ * (bounded) and commits are de-duplicated by id, so cost scales with the
+ * number of *unique* commits rather than round-trips done one at a time.
+ * Read-only; nothing is written anywhere.
  */
 export async function fetchFileChanges(
   config: GitlabConfig,
   since: Date,
   until: Date,
-  projectRefsOverride?: string[]
+  projectRefs: string[]
 ): Promise<GitFileChange[]> {
-  const allChanges: GitFileChange[] = [];
-  const projectRefs =
-    projectRefsOverride && projectRefsOverride.length > 0 ? projectRefsOverride : config.projectRefs;
-
-  if (projectRefs.length === 0) {
+  if (!projectRefs || projectRefs.length === 0) {
     throw new Error(
-      "Tidak ada project yang dipilih — pilih repo dari daftar starred project, atau set GITLAB_PROJECT_IDS di .env."
+      "Tidak ada project yang dipilih — pilih minimal satu repo dari daftar starred project."
     );
   }
 
-  for (const projectRef of projectRefs) {
-    const appName = await getProjectName(config, projectRef);
-    const commits = await listCommitsForProject(config, projectRef, since, until);
-    for (const commit of commits) {
-      const changes = await getCommitFileChanges(config, projectRef, appName, commit);
-      allChanges.push(...changes);
-    }
-  }
+  // Phase 1: per project, resolve the display name and list its commits.
+  // Runs across projects in parallel; the two calls per project also run
+  // together since they don't depend on each other.
+  const perProject = await mapWithConcurrency(projectRefs, PROJECT_CONCURRENCY, async (projectRef) => {
+    const [appName, commits] = await Promise.all([
+      getProjectName(config, projectRef),
+      listCommitsForProject(config, projectRef, since, until),
+    ]);
+    // `all=true` can surface the same commit on several branches — dedup by
+    // id so its diff is fetched (and logged) only once.
+    const uniqueCommits = [...new Map(commits.map((c) => [c.id, c])).values()];
+    return uniqueCommits.map((commit) => ({ projectRef, appName, commit }));
+  });
 
-  return allChanges;
+  // Phase 2: fetch every commit's file-level diffs, bounded in parallel.
+  const tasks = perProject.flat();
+  const changesPerCommit = await mapWithConcurrency(tasks, DIFF_CONCURRENCY, ({ projectRef, appName, commit }) =>
+    getCommitFileChanges(config, projectRef, appName, commit)
+  );
+
+  return changesPerCommit.flat();
 }

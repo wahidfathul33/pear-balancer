@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/gitlab-projects
  * Lists projects starred by the configured GitLab token's owner, so the
- * logbook page can offer them as a dropdown instead of requiring
- * GITLAB_PROJECT_IDS to be hardcoded in .env.
+ * logbook page can offer them as a dropdown for the user to pick from per
+ * generation.
  */
 export async function GET() {
   try {

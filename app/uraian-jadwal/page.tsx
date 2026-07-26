@@ -1,19 +1,27 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { PATTERN_1, PATTERN_2, Task, KETERANGAN_MAP } from "@/lib/data";
-import { generateSchedule } from "@/lib/scheduler";
+import {
+  DEFAULT_PATTERN_1,
+  DEFAULT_PATTERN_2,
+  PatternRow,
+  clonePattern,
+  expandPattern,
+  KETERANGAN_MAP,
+} from "@/lib/data";
+import { generateSchedule, DEFAULT_MAX_BOBOT } from "@/lib/scheduler";
 import type { DaySummary } from "@/lib/scheduler";
 import { WeekPicker, getMondayOfWeek, getFridayOfWeek, toLocalISODate } from "@/app/components/WeekPicker";
 import { ProjectPicker } from "@/app/components/ProjectPicker";
+import { PatternEditor } from "@/app/components/PatternEditor";
 import type { LogbookEntry } from "@/lib/logbook";
 import { downloadXlsx } from "@/lib/excel";
 
 type PatternKey = "1" | "2";
 
-const PATTERNS: Record<PatternKey, Task[]> = {
-  "1": PATTERN_1,
-  "2": PATTERN_2,
+const DEFAULT_PATTERNS: Record<PatternKey, PatternRow[]> = {
+  "1": DEFAULT_PATTERN_1,
+  "2": DEFAULT_PATTERN_2,
 };
 
 const LOGBOOK_CACHE_KEY = "logbook-cache-v1";
@@ -147,6 +155,8 @@ export default function UraianJadwalPage() {
   const [commitStartDate, setCommitStartDate] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [commitEndDate, setCommitEndDate] = useState<Date>(() => getFridayOfWeek(new Date()));
   const [pattern, setPattern] = useState<PatternKey>("1");
+  const [patternRows, setPatternRows] = useState<PatternRow[]>(() => clonePattern(DEFAULT_PATTERNS["1"]));
+  const [maxBobot, setMaxBobot] = useState<number>(DEFAULT_MAX_BOBOT);
   const [projectRefs, setProjectRefs] = useState<string[]>([]);
   const [rows, setRows] = useState<UraianRow[] | null>(null);
   const [daySummaries, setDaySummaries] = useState<DaySummary[] | null>(null);
@@ -190,7 +200,7 @@ export default function UraianJadwalPage() {
         const restoredScheduleStart = new Date(`${cached.scheduleStartDate}T00:00:00`);
         const restoredScheduleEnd = new Date(`${cached.scheduleEndDate}T00:00:00`);
         const restoredSchedule = generateSchedule(
-          PATTERNS[cached.pattern],
+          expandPattern(DEFAULT_PATTERNS[cached.pattern]),
           restoredScheduleStart,
           restoredScheduleEnd
         );
@@ -199,6 +209,7 @@ export default function UraianJadwalPage() {
         setCommitStartDate(new Date(`${cached.commitStartDate}T00:00:00`));
         setCommitEndDate(new Date(`${cached.commitEndDate}T00:00:00`));
         setPattern(cached.pattern);
+        setPatternRows(clonePattern(DEFAULT_PATTERNS[cached.pattern]));
         setProjectRefs(cached.projectRefs);
         setRows(cached.rows);
         setDaySummaries(
@@ -249,6 +260,11 @@ export default function UraianJadwalPage() {
     setCommitEndDate(end);
   };
 
+  const selectPattern = (key: PatternKey) => {
+    setPattern(key);
+    setPatternRows(clonePattern(DEFAULT_PATTERNS[key]));
+  };
+
   const updateUraian = useCallback((idx: number, value: string) => {
     setRows((prev) => {
       if (!prev) return prev;
@@ -275,9 +291,10 @@ export default function UraianJadwalPage() {
     setError(null);
     try {
       const scheduleResult = generateSchedule(
-        PATTERNS[pattern],
+        expandPattern(patternRows),
         scheduleStartDate,
-        scheduleEndDate
+        scheduleEndDate,
+        maxBobot
       );
       const { scheduled } = scheduleResult;
       const scheduleStartDateString = toLocalISODate(scheduleStartDate);
@@ -323,7 +340,7 @@ export default function UraianJadwalPage() {
     } finally {
       setLoading(false);
     }
-  }, [scheduleStartDate, scheduleEndDate, commitStartDate, commitEndDate, pattern, projectRefs]);
+  }, [scheduleStartDate, scheduleEndDate, commitStartDate, commitEndDate, pattern, patternRows, maxBobot, projectRefs]);
 
   const manualCount = rows?.filter((r) => r.uraian.trim() === "").length ?? 0;
 
@@ -369,7 +386,7 @@ export default function UraianJadwalPage() {
                   <button
                     key={p}
                     type="button"
-                    onClick={() => setPattern(p)}
+                    onClick={() => selectPattern(p)}
                     className={[
                       "flex-1 text-sm font-medium transition-colors focus:outline-none",
                       pattern === p
@@ -388,6 +405,15 @@ export default function UraianJadwalPage() {
               </label>
               <ProjectPicker selected={projectRefs} onChange={setProjectRefs} />
             </div>
+          </div>
+          <div className="mt-4">
+            <PatternEditor
+              rows={patternRows}
+              onChange={setPatternRows}
+              onReset={() => setPatternRows(clonePattern(DEFAULT_PATTERNS[pattern]))}
+              maxBobot={maxBobot}
+              onMaxBobotChange={setMaxBobot}
+            />
           </div>
           <div className="mt-4 flex items-center gap-3">
             <button

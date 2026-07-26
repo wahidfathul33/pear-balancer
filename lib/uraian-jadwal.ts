@@ -5,7 +5,7 @@
  * The schedule remains the source of truth for dates and activity codes.
  * The AI only synthesizes the wording from the complete logbook context.
  */
-import { chatComplete, loadAiConfigFromEnv, ChatMessage } from "./ai-client";
+import { chatComplete, loadAiConfigFromEnv, ChatMessage, isBadRequestError } from "./ai-client";
 import { KETERANGAN_MAP } from "./data";
 import {
   extractEntriesArray,
@@ -168,11 +168,22 @@ async function synthesizeTargets(
   const aiConfig = loadAiConfigFromEnv();
   const messages = buildSynthesisPrompt(targets, contextEntries);
 
+  // Enforce JSON output where the provider supports it; disable via
+  // AI_JSON_OBJECT=false for models that reject the param.
+  const wantJsonObject = process.env.AI_JSON_OBJECT !== "false";
+
   try {
     let raw: string;
-    try {
-      raw = await chatComplete(aiConfig, messages, { temperature: 0.2, jsonObject: true });
-    } catch {
+    if (wantJsonObject) {
+      try {
+        raw = await chatComplete(aiConfig, messages, { temperature: 0.2, jsonObject: true });
+      } catch (err) {
+        // Retry without response_format only on a 4xx (param rejected), not
+        // on timeouts/5xx — otherwise a slow call is paid for twice.
+        if (!isBadRequestError(err)) throw err;
+        raw = await chatComplete(aiConfig, messages, { temperature: 0.2 });
+      }
+    } else {
       raw = await chatComplete(aiConfig, messages, { temperature: 0.2 });
     }
 

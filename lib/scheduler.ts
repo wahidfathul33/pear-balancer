@@ -14,7 +14,8 @@ export interface DaySummary {
   tasks: ScheduledTask[];
 }
 
-const MAX_BOBOT = 27.5;
+/** Default weekly bobot cap; callers may override per generation. */
+export const DEFAULT_MAX_BOBOT = 27.5;
 const DAY_NAMES = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat"];
 
 /**
@@ -118,17 +119,18 @@ function effectiveScore(
 export function generateSchedule(
   tasks: Task[],
   startDate: Date,
-  endDate: Date
+  endDate: Date,
+  maxBobot: number = DEFAULT_MAX_BOBOT
 ): {
   scheduled: ScheduledTask[];
   daySummaries: DaySummary[];
   totalBobot: number;
 } {
-  // ── 1. Trim to MAX_BOBOT ────────────────────────────────────────────────
+  // ── 1. Trim to maxBobot ─────────────────────────────────────────────────
   let totalBobot = tasks.reduce((s, t) => s + t.bobot, 0);
   let workingTasks = [...tasks];
 
-  if (totalBobot > MAX_BOBOT) {
+  if (totalBobot > maxBobot) {
     // Remove fillers (priority 0) first (heaviest first), then lightest mains
     const sorted = [...tasks].sort((a, b) => {
       const pa = normPriority(a.prioritas);
@@ -142,7 +144,7 @@ export function generateSchedule(
     const trimmed: Task[] = [];
     let acc = 0;
     for (const t of sorted) {
-      if (acc + t.bobot <= MAX_BOBOT) {
+      if (acc + t.bobot <= maxBobot) {
         trimmed.push(t);
         acc += t.bobot;
       }

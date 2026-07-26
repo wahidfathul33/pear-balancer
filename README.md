@@ -1,37 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Generate Logbook
 
-## Getting Started
+Aplikasi Next.js untuk menyusun logbook harian dan uraian aktivitas jadwal dari
+riwayat commit GitLab, diklasifikasikan otomatis oleh AI. Seluruh proses
+stateless — tidak ada data yang disimpan ke database.
 
-First, run the development server:
+## Fitur
+
+- **Generate Logbook** — menarik perubahan file dari commit GitLab pada rentang
+  tanggal, menggabungkan diff kecil per hari, lalu mengklasifikasikannya menjadi
+  entri logbook (kode kegiatan + deskripsi) via AI.
+- **Uraian Jadwal** — mengisi uraian aktivitas untuk jadwal yang sudah ada,
+  memakai konteks logbook yang sama sebagai sumber bukti.
+
+## Persiapan
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+nvm use          # Node 22 (lihat .nvmrc)
+npm install
+cp .env.example .env   # lalu isi AI_API_KEY, GITLAB_TOKEN, GITLAB_AUTHOR_EMAIL
 ```
 
+Lihat `.env.example` untuk daftar variabel. Poin penting:
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `AI_BASE_URL` menerima endpoint apa pun yang OpenAI-compatible (OpenRouter,
+  Groq, Together, LLM lokal). Default OpenRouter.
+- `AI_JSON_OBJECT=false` bila model tidak mendukung `response_format`.
+- Token GitLab butuh scope `read_api`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Menjalankan
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev      # http://localhost:3000
+```
 
-## Learn More
+Repo GitLab **dipilih per-generate** dari daftar starred project di UI — minimal
+satu repo wajib dipilih (tidak ada default dari `.env`).
 
-To learn more about Next.js, take a look at the following resources:
+## Struktur
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `lib/gitlab.ts` — client REST GitLab (read-only, fetch paralel + dedup commit).
+- `lib/ai-client.ts` — client chat-completion OpenAI-compatible.
+- `lib/logbook.ts` — pipeline logbook: fetch → gabung diff → klasifikasi AI.
+- `lib/uraian-jadwal.ts` — sintesis uraian jadwal dari konteks logbook.
+- `app/api/*` — route stateless untuk tiap fitur.
