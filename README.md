@@ -34,6 +34,8 @@ Jika memakai OpenRouter, gunakan `AI_BASE_URL=https://openrouter.ai/api/v1` dan 
 
 Client tetap memakai endpoint Chat Completions agar kompatibel dengan OpenAI maupun endpoint OpenAI-compatible. Pada GPT-5.4 Mini, aplikasi tidak mengirim `temperature`, memakai reasoning `none` untuk menghemat token, dan membatasi output secara default. Naikkan `AI_MAX_COMPLETION_TOKENS` bila respons terpotong; untuk rentang commit yang sangat besar, memperbesar context model saja tetap tidak menggantikan batching.
 
+Generate logbook mengirim maksimal 10 unit per permintaan AI dan otomatis membelah batch lagi jika respons terpotong atau JSON tidak lengkap. Nilainya dapat diubah melalui `LOGBOOK_AI_BATCH_SIZE`; gunakan nilai lebih kecil seperti `5` untuk provider dengan batas output rendah.
+
 ## Deploy ke Vercel
 
 Aplikasi aman dijalankan di Vercel selama seluruh nilai `.env.local` dimasukkan sebagai Environment Variables di pengaturan project dan file `.env*` tidak di-commit. Build production dapat diperiksa dengan:

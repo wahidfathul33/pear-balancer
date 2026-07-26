@@ -28,6 +28,15 @@ export interface ChatCompleteOptions {
   maxCompletionTokens?: number;
 }
 
+export class AiCompletionTruncatedError extends Error {
+  constructor(model: string) {
+    super(
+      `Respons AI terpotong karena mencapai batas output atau context (model=${model}, finish_reason=length)`
+    );
+    this.name = "AiCompletionTruncatedError";
+  }
+}
+
 function isGpt54Mini(model: string): boolean {
   const modelId = model.toLowerCase().split("/").pop() || "";
   return modelId === "gpt-5.4-mini" || modelId.startsWith("gpt-5.4-mini-");
@@ -179,6 +188,9 @@ export async function chatComplete(
     }
   )?.choices?.[0];
   const content = choice?.message?.content;
+  if (choice?.finish_reason === "length") {
+    throw new AiCompletionTruncatedError(config.model);
+  }
   if (!content) {
     const detail = [
       `model=${config.model}`,

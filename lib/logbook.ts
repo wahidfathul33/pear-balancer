@@ -1,6 +1,12 @@
 import { KETERANGAN_MAP } from "./data";
 import { fetchFileChanges, loadGitlabConfigFromEnv, GitFileChange } from "./gitlab";
-import { chatComplete, loadAiConfigFromEnv, ChatMessage, AiConfig } from "./ai-client";
+import {
+  AiCompletionTruncatedError,
+  chatComplete,
+  loadAiConfigFromEnv,
+  ChatMessage,
+  AiConfig,
+} from "./ai-client";
 
 /** id 5090 (backup) is excluded from AI-generated logbook classification. */
 const DEFAULT_EXCLUDED_IDS = [5090];
@@ -24,6 +30,13 @@ function loadExcludedIds(): number[] {
 function loadSmallChangeThreshold(): number {
   const raw = Number(process.env.LOGBOOK_SMALL_CHANGE_THRESHOLD);
   return Number.isFinite(raw) && raw > 0 ? raw : 15;
+}
+
+/** Number of logbook units sent in one AI request. Smaller batches prevent truncated JSON. */
+function loadAiBatchSize(): number {
+  const raw = Number(process.env.LOGBOOK_AI_BATCH_SIZE);
+  if (!Number.isInteger(raw) || raw <= 0) return 10;
+  return Math.min(raw, 50);
 }
 
 /** Cap on characters of diff text sent to the AI per unit, to keep prompts bounded. */
@@ -249,7 +262,16 @@ export function extractEntriesArray(text: string): unknown[] {
   }
 
   const preview = text.slice(0, 400);
-  throw new Error(`Respons AI tidak mengandung JSON yang valid. Cuplikan respons: ${preview}`);
+  throw new InvalidAiJsonError(
+    `Respons AI tidak mengandung JSON yang valid. Cuplikan respons: ${preview}`
+  );
+}
+
+class InvalidAiJsonError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidAiJsonError";
+  }
 }
 
 export interface ClassifiedUnit {
@@ -270,6 +292,57 @@ export async function classifyUnits(
 ): Promise<ClassifiedUnit[]> {
   if (units.length === 0) return [];
 
+  const batchSize = loadAiBatchSize();
+  const classified: ClassifiedUnit[] = [];
+
+  // Keep requests small enough that the provider can close the JSON object.
+  // If a provider still truncates a batch, recursively split only that batch;
+  // successful batches are retained and are never generated twice.
+  for (let start = 0; start < units.length; start += batchSize) {
+    const batch = units.slice(start, start + batchSize);
+    classified.push(...(await classifyBatchWithAdaptiveSplit(batch, allowedMap, aiConfig)));
+  }
+
+  return classified;
+}
+
+async function classifyBatchWithAdaptiveSplit(
+  units: LogbookUnit[],
+  allowedMap: Record<number, string>,
+  aiConfig: AiConfig
+): Promise<ClassifiedUnit[]> {
+  try {
+    return await classifyBatch(units, allowedMap, aiConfig);
+  } catch (error) {
+    const canSplit =
+      error instanceof AiCompletionTruncatedError || error instanceof InvalidAiJsonError;
+    if (!canSplit) throw error;
+
+    if (units.length === 1) {
+      return [fallbackClassifiedUnit(units[0], allowedMap)];
+    }
+
+    const middle = Math.ceil(units.length / 2);
+    const left = await classifyBatchWithAdaptiveSplit(
+      units.slice(0, middle),
+      allowedMap,
+      aiConfig
+    );
+    const right = await classifyBatchWithAdaptiveSplit(
+      units.slice(middle),
+      allowedMap,
+      aiConfig
+    );
+    return [...left, ...right];
+  }
+}
+
+async function classifyBatch(
+  units: LogbookUnit[],
+  allowedMap: Record<number, string>,
+  aiConfig: AiConfig
+): Promise<ClassifiedUnit[]> {
+
   const messages = buildPrompt(units, allowedMap);
 
   let raw: string;
@@ -277,7 +350,11 @@ export async function classifyUnits(
     // Ask the provider to enforce valid JSON output where supported — this
     // eliminates most stray-prose/markdown-fence parsing failures outright.
     raw = await chatComplete(aiConfig, messages, { jsonObject: true });
-  } catch {
+  } catch (error) {
+    // A truncated response cannot be repaired by disabling JSON mode. Let the
+    // caller split the batch instead of paying for another oversized request.
+    if (error instanceof AiCompletionTruncatedError) throw error;
+
     // Some models/providers reject the response_format param entirely;
     // retry without it and rely on the tolerant extractor below.
     raw = await chatComplete(aiConfig, messages);
@@ -303,6 +380,21 @@ export async function classifyUnits(
       deskripsiPengetesan: item?.deskripsi_pengetesan?.trim(),
     };
   });
+}
+
+function fallbackClassifiedUnit(
+  unit: LogbookUnit,
+  allowedMap: Record<number, string>
+): ClassifiedUnit {
+  const id = fallbackId(allowedMap);
+  const commitContext = unit.commitTitles.filter(Boolean).slice(0, 2).join("; ");
+  const files = unit.files.slice(0, 3).join(", ");
+  const detail = commitContext || files || "perubahan kode";
+
+  return {
+    id,
+    deskripsi: `Melakukan perubahan ${detail}`,
+  };
 }
 
 export interface GenerateLogbookOptions {
