@@ -46,6 +46,8 @@ export interface LogbookEntry {
   keterangan: string;
   deskripsi: string;
   files: string[];
+  /** Human-readable GitLab application/repository names that support this entry. */
+  appNames?: string[];
 }
 
 function truncate(text: string, max: number): string {
@@ -357,6 +359,7 @@ export async function generateLogbook(
       keterangan: allowedMap[id],
       deskripsi: appendAppName(baseDeskripsi, unit.appNames),
       files: unit.files,
+      appNames: unit.appNames,
     });
 
     // Setiap perbaikan/perawatan (5091) wajib diverifikasi lewat pengetesan,
@@ -371,6 +374,7 @@ export async function generateLogbook(
         keterangan: allowedMap[TESTING_ID],
         deskripsi: appendAppName(testingDeskripsi, unit.appNames),
         files: unit.files,
+        appNames: unit.appNames,
       });
     }
   });

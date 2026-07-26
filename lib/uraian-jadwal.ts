@@ -16,6 +16,21 @@ import { ScheduledTask } from "./scheduler";
 
 const BACKUP_ID = 5090;
 
+const INDONESIAN_MONTHS = [
+  "Januari",
+  "Februari",
+  "Maret",
+  "April",
+  "Mei",
+  "Juni",
+  "Juli",
+  "Agustus",
+  "September",
+  "Oktober",
+  "November",
+  "Desember",
+];
+
 const BACKUP_ACTIVITIES = [
   "Melaksanakan backup database aplikasi CDC ke media penyimpanan yang tersedia pada server lokal.",
   "Mengamankan data aplikasi SIMPEG dengan melakukan pencadangan basis data ke server lokal.",
@@ -36,8 +51,8 @@ export interface UraianRow {
 
 export interface GenerateUraianJadwalOptions {
   scheduled: ScheduledTask[];
-  startDate: Date;
-  endDate: Date;
+  commitStartDate: Date;
+  commitEndDate: Date;
   projectRefs: string[];
   /** Reuse the result from Generate Logbook when the browser has a matching cache. */
   logbookEntries?: LogbookEntry[];
@@ -77,8 +92,8 @@ export async function generateUraianJadwal(
       ? suppliedEntries
       : (
           await generateLogbook({
-            startDate: options.startDate,
-            endDate: options.endDate,
+            startDate: options.commitStartDate,
+            endDate: options.commitEndDate,
             projectRefs: options.projectRefs,
           })
         ).entries;
@@ -97,10 +112,12 @@ export async function generateUraianJadwal(
   let backupCursor = 0;
 
   const rows = options.scheduled.map((task, slot): UraianRow => {
-    const uraian =
+    const target = { slot, tanggal: task.tanggal, id: task.id };
+    const baseUraian =
       task.id === BACKUP_ID
         ? backupActivityAt(backupCursor++)
-        : generatedBySlot.get(slot) ?? fallbackUraian({ slot, tanggal: task.tanggal, id: task.id }, contextEntries);
+        : generatedBySlot.get(slot) ?? fallbackUraian(target, contextEntries);
+    const uraian = finalizeUraian(baseUraian, target, contextEntries);
 
     return {
       tanggal: task.tanggal,
@@ -226,7 +243,9 @@ function buildSynthesisPrompt(
         "- bukti yang sama boleh dipakai untuk kategori berbeda jika sudut kegiatannya memang berbeda, misalnya implementasi, pengoperasian, pemeliharaan, dan evaluasi",
         "- uraian pada id yang sama harus berbeda fokus, bukan parafrasa berulang",
         "- gunakan hanya fitur, modul, aplikasi, dan pekerjaan yang didukung konteks; jangan mengarang pekerjaan baru",
+        "- setiap uraian wajib menyebut nama aplikasi/repo yang relevan secara eksplisit sesuai field aplikasi pada konteks",
         "- tanggal target hanya penempatan jadwal dan tidak membatasi tanggal asli entri yang boleh disintesis",
+        "- jangan menambahkan tanggal ke uraian; server akan menambahkan tanggal task dari slot target secara deterministik",
       ].join("\n"),
       "Balas hanya dengan objek JSON valid berskema: {\"entries\":[{\"slot\":0,\"id\":540,\"uraian\":\"...\"}]}",
     ].join("\n\n"),
@@ -238,6 +257,7 @@ function buildSynthesisPrompt(
     kode_asal: entry.id,
     kategori_asal: entry.keterangan,
     deskripsi: entry.deskripsi,
+    aplikasi: getEntryAppNames(entry),
     files: entry.files.slice(0, 8),
   }));
 
@@ -277,4 +297,95 @@ function fallbackUraian(
   };
 
   return `${prefixes[target.id] ?? KETERANGAN_MAP[target.id] ?? "Melaksanakan kegiatan"}: ${evidence}.`;
+}
+
+/** Returns structured app names, with a cache-compatible fallback for older logbook entries. */
+function getEntryAppNames(entry: LogbookEntry): string[] {
+  const structured = entry.appNames?.map((name) => name.trim()).filter(Boolean) ?? [];
+  if (structured.length > 0) return [...new Set(structured)];
+
+  const trailingParenthetical = entry.deskripsi.match(/\(([^()]+)\)\s*\.?\s*$/)?.[1];
+  if (!trailingParenthetical) return [];
+
+  return [
+    ...new Set(
+      trailingParenthetical
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function appNamesForTarget(
+  target: TargetSlot,
+  contextEntries: LogbookEntry[]
+): string[] {
+  const sameCategory = contextEntries.filter((entry) => entry.id === target.id);
+  const candidates = sameCategory.length > 0 ? sameCategory : contextEntries;
+  if (candidates.length === 0) return [];
+
+  for (let offset = 0; offset < candidates.length; offset++) {
+    const entry = candidates[(target.slot + offset) % candidates.length];
+    const names = getEntryAppNames(entry);
+    if (names.length > 0) return names;
+  }
+
+  return [];
+}
+
+function ensureAppName(
+  description: string,
+  appNames: string[]
+): string {
+  const trimmed = description.trim();
+  if (appNames.length === 0) return trimmed;
+
+  const normalizedDescription = trimmed.toLocaleLowerCase("id-ID");
+  const alreadyMentionsApp = appNames.some((name) =>
+    normalizedDescription.includes(name.toLocaleLowerCase("id-ID"))
+  );
+  if (alreadyMentionsApp) return trimmed;
+
+  const sentence = trimmed.replace(/[.\s]+$/, "");
+  return `${sentence} pada aplikasi ${appNames.join(", ")}.`;
+}
+
+function formatIndonesianDate(dateString: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+  if (!match) return dateString;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return dateString;
+
+  return `${day} ${INDONESIAN_MONTHS[month - 1]} ${year}`;
+}
+
+function appendTaskDate(description: string, taskDate: string): string {
+  const monthPattern = INDONESIAN_MONTHS.join("|");
+  const existingDateSuffix = new RegExp(
+    `\\s*\\(\\d{1,2}\\s+(?:${monthPattern})\\s+\\d{4}\\)\\.?\\s*$`,
+    "i"
+  );
+  const sentence = description
+    .replace(existingDateSuffix, "")
+    .trim()
+    .replace(/[.\s]+$/, "");
+
+  return `${sentence}. (${formatIndonesianDate(taskDate)})`;
+}
+
+function finalizeUraian(
+  description: string,
+  target: TargetSlot,
+  contextEntries: LogbookEntry[]
+): string {
+  const withAppName =
+    target.id === BACKUP_ID
+      ? description.trim()
+      : ensureAppName(description, appNamesForTarget(target, contextEntries));
+
+  return appendTaskDate(withAppName, target.tanggal);
 }

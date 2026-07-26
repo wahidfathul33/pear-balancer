@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { PATTERN_1, PATTERN_2, Task } from "@/lib/data";
 import { generateSchedule, ScheduledTask, DaySummary } from "@/lib/scheduler";
 import { WeekPicker, getMondayOfWeek, getFridayOfWeek } from "@/app/components/WeekPicker";
+import { downloadXlsx } from "@/lib/excel";
 
 type PatternKey = "1" | "2";
 
@@ -51,19 +52,21 @@ function CopyTanggalButton({ tasks }: { tasks: ScheduledTask[] }) {
   );
 }
 
-function downloadCSV(tasks: ScheduledTask[]) {
-  const header = "id,bobot,prioritas,keterangan,tanggal";
-  const rows = tasks.map(
-    (t) => `${t.id},${t.bobot},${t.prioritas ?? ""},"${t.keterangan}",${t.tanggal}`
-  );
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "jadwal.csv";
-  a.click();
-  URL.revokeObjectURL(url);
+function downloadScheduleExcel(tasks: ScheduledTask[]) {
+  return downloadXlsx({
+    filename: "jadwal-task.xlsx",
+    sheetName: "Jadwal Task",
+    rows: tasks,
+    columns: [
+      { header: "No.", value: (_task, index) => index + 1, width: 7 },
+      { header: "Kode Kegiatan", value: (task) => task.id, width: 17 },
+      { header: "Bobot", value: (task) => task.bobot, width: 10 },
+      { header: "Prioritas", value: (task) => task.prioritas ?? "", width: 12 },
+      { header: "Keterangan", value: (task) => task.keterangan, width: 60 },
+      { header: "Tanggal", value: (task) => task.tanggal, width: 15 },
+      { header: "Link Bukti (Opsional)", value: () => "", width: 28 },
+    ],
+  });
 }
 
 function getDayLabel(dateStr: string): string {
@@ -94,8 +97,8 @@ export default function Home() {
   }, [startDate, endDate, pattern]);
 
   return (
-    <main className="min-h-screen bg-gray-50 py-10 px-4">
-      <div className="max-w-5xl mx-auto space-y-8">
+    <main className="min-h-screen bg-slate-200 py-10">
+      <div className="w-[80%] mx-auto space-y-8">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Generate Jadwal Task</h1>
           <p className="text-sm text-gray-500 mt-1">
@@ -103,7 +106,7 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow p-6">
+        <div className="bg-slate-50 border border-slate-300 rounded-2xl shadow-lg shadow-slate-900/10 p-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="flex flex-col gap-1 sm:col-span-2">
               <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
@@ -115,7 +118,7 @@ export default function Home() {
               <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
                 Pattern
               </label>
-              <div className="flex rounded-lg border border-gray-300 overflow-hidden h-[38px]">
+              <div className="w-full h-10 flex rounded-lg border border-gray-300 overflow-hidden">
                 {(["1", "2"] as PatternKey[]).map((p) => (
                   <button
                     key={p}
@@ -146,7 +149,7 @@ export default function Home() {
 
         {scheduled && daySummaries && (
           <>
-            <div className="bg-white rounded-2xl shadow p-4 flex flex-wrap gap-4 items-center justify-between">
+            <div className="bg-slate-50 border border-slate-300 rounded-2xl shadow-lg shadow-slate-900/10 p-4 flex flex-wrap gap-4 items-center justify-between">
               <div className="flex flex-wrap gap-6">
                 {daySummaries.map((ds) => (
                   <div key={ds.tanggal} className="text-center">
@@ -163,24 +166,24 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl shadow overflow-hidden">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="bg-slate-50 border border-slate-300 rounded-2xl shadow-lg shadow-slate-900/10 overflow-hidden">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
                 <h2 className="text-base font-semibold text-gray-700">
                   Jadwal Task ({scheduled.length} task)
                 </h2>
                 <div className="flex gap-2">
                   <CopyTanggalButton tasks={[...scheduled].sort((a, b) => a.id - b.id || a.tanggal.localeCompare(b.tanggal))} />
                   <button
-                    onClick={() => downloadCSV(scheduled)}
+                    onClick={() => void downloadScheduleExcel(scheduled)}
                     className="bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg px-4 py-2 transition-colors"
                   >
-                    Download CSV
+                    Download Excel
                   </button>
                 </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-100">
+                  <thead className="bg-slate-200/70 border-b border-slate-300">
                     <tr>
                       <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">#</th>
                       <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">ID</th>
@@ -191,11 +194,11 @@ export default function Home() {
                       <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tanggal</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
+                  <tbody className="divide-y divide-slate-200">
                     {[...scheduled]
                       .sort((a, b) => a.id - b.id || a.tanggal.localeCompare(b.tanggal))
                       .map((task, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                      <tr key={idx} className="hover:bg-slate-100 transition-colors">
                         <td className="px-6 py-3 text-gray-400">{idx + 1}</td>
                         <td className="px-6 py-3 font-medium text-gray-800">{task.id}</td>
                         <td className="px-6 py-3 text-gray-600 max-w-xs">{task.keterangan}</td>
@@ -216,7 +219,7 @@ export default function Home() {
                   </tbody>
                 </table>
               </div>
-              <div className="border-t border-gray-100 px-6 py-4 bg-gray-50">
+              <div className="border-t border-slate-300 px-6 py-4 bg-slate-200/70">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
                   Total Bobot per Hari
                 </p>

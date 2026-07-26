@@ -60,10 +60,13 @@ export function WeekPicker({
   startDate,
   endDate,
   onChange,
+  selectionMode = "workweek",
 }: {
   startDate: Date;
   endDate: Date;
   onChange: (start: Date, end: Date) => void;
+  /** `workweek` keeps both dates on one Monday-Friday week; `range` allows any inclusive date range. */
+  selectionMode?: "workweek" | "range";
 }) {
   const [open, setOpen] = useState(false);
   const [viewYear, setViewYear] = useState(startDate.getFullYear());
@@ -73,15 +76,12 @@ export function WeekPicker({
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) {
-      setTempStart(null);
-      setHoverDate(null);
-    }
-  }, [open]);
-
-  useEffect(() => {
     function handleOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setTempStart(null);
+        setHoverDate(null);
+        setOpen(false);
+      }
     }
     document.addEventListener("mousedown", handleOutside);
     return () => document.removeEventListener("mousedown", handleOutside);
@@ -106,14 +106,18 @@ export function WeekPicker({
     return d.getDay() >= 1 && d.getDay() <= 5;
   }
 
+  function isSelectable(d: Date) {
+    return selectionMode === "range" || isWorkday(d);
+  }
+
   function handleDayClick(d: Date) {
-    if (!isWorkday(d)) return;
+    if (!isSelectable(d)) return;
     if (!tempStart) {
       setTempStart(d);
     } else {
       const sameWeek =
         getMondayOfWeek(tempStart).getTime() === getMondayOfWeek(d).getTime();
-      if (sameWeek) {
+      if (selectionMode === "range" || sameWeek) {
         let s = tempStart,
           e = d;
         if (e < s) {
@@ -136,11 +140,12 @@ export function WeekPicker({
   let hlStart: Date = startDate,
     hlEnd: Date = endDate;
   if (tempStart) {
-    const sameWeekHover =
+    const validHover =
       hoverDate &&
-      isWorkday(hoverDate) &&
-      getMondayOfWeek(tempStart).getTime() === getMondayOfWeek(hoverDate).getTime();
-    if (sameWeekHover && hoverDate) {
+      isSelectable(hoverDate) &&
+      (selectionMode === "range" ||
+        getMondayOfWeek(tempStart).getTime() === getMondayOfWeek(hoverDate).getTime());
+    if (validHover && hoverDate) {
       hlStart = tempStart < hoverDate ? tempStart : hoverDate;
       hlEnd = tempStart < hoverDate ? hoverDate : tempStart;
     } else {
@@ -156,8 +161,17 @@ export function WeekPicker({
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white hover:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-left"
+        onClick={() => {
+          if (open) {
+            setTempStart(null);
+            setHoverDate(null);
+          } else {
+            setViewYear(startDate.getFullYear());
+            setViewMonth(startDate.getMonth());
+          }
+          setOpen(!open);
+        }}
+        className="w-full h-10 flex items-center gap-2 border border-gray-300 rounded-lg px-3 text-sm bg-white hover:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-left"
       >
         <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
           <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -212,22 +226,22 @@ export function WeekPicker({
           <div className="grid grid-cols-7">
             {cells.map((d, i) => {
               if (!d) return <div key={i} />;
-              const wknd = !isWorkday(d);
-              const inRange = !wknd && isBetween(d, hlStart, hlEnd);
-              const isHlStart = !wknd && isSameDay(d, hlStart);
-              const isHlEnd = !wknd && isSameDay(d, hlEnd);
+              const disabled = !isSelectable(d);
+              const inRange = !disabled && isBetween(d, hlStart, hlEnd);
+              const isHlStart = !disabled && isSameDay(d, hlStart);
+              const isHlEnd = !disabled && isSameDay(d, hlEnd);
               const isInner = inRange && !isHlStart && !isHlEnd;
               return (
                 <div
                   key={i}
                   className={[
                     "flex items-center justify-center h-8 text-xs select-none transition-colors",
-                    wknd ? "text-gray-300" : "cursor-pointer",
+                    disabled ? "text-gray-300" : "cursor-pointer",
                     isHlStart || isHlEnd ? "bg-blue-600 text-white rounded-full z-10" : "",
                     isInner ? "bg-blue-100 text-blue-700" : "",
-                    !wknd && !inRange && !isHlStart && !isHlEnd ? "text-gray-700 hover:bg-gray-100 rounded-full" : "",
+                    !disabled && !inRange && !isHlStart && !isHlEnd ? "text-gray-700 hover:bg-gray-100 rounded-full" : "",
                   ].join(" ")}
-                  onMouseEnter={() => !wknd && setHoverDate(d)}
+                  onMouseEnter={() => !disabled && setHoverDate(d)}
                   onMouseLeave={() => setHoverDate(null)}
                   onClick={() => handleDayClick(d)}
                 >
@@ -240,7 +254,7 @@ export function WeekPicker({
           <p className="text-xs text-gray-400 mt-3 text-center">
             {phase === "start"
               ? "Klik untuk pilih tanggal awal"
-              : `Awal: ${toLocalISODate(tempStart!)} · Klik tanggal akhir`}
+              : `Awal: ${toLocalISODate(tempStart!)} · Klik tanggal akhir${selectionMode === "workweek" ? " pada minggu yang sama" : ""}`}
           </p>
         </div>
       )}

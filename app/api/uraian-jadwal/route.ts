@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST /api/uraian-jadwal
- * Body: { scheduled: ScheduledTask[], startDate: "YYYY-MM-DD", endDate: "YYYY-MM-DD",
+ * Body: { scheduled: ScheduledTask[], commitStartDate: "YYYY-MM-DD", commitEndDate: "YYYY-MM-DD",
  *         projectRefs: string[], logbookEntries?: LogbookEntry[] }
  *
  * Stateless: enriches an already-generated jadwal with per-row "Uraian
@@ -17,8 +17,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   let body: {
     scheduled?: ScheduledTask[];
-    startDate?: string;
-    endDate?: string;
+    commitStartDate?: string;
+    commitEndDate?: string;
     projectRefs?: string[];
     logbookEntries?: LogbookEntry[];
   };
@@ -28,13 +28,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Body harus berupa JSON" }, { status: 400 });
   }
 
-  const { scheduled, startDate, endDate, projectRefs, logbookEntries } = body;
+  const { scheduled, commitStartDate, commitEndDate, projectRefs, logbookEntries } = body;
   if (!scheduled || scheduled.length === 0) {
     return NextResponse.json({ error: "scheduled wajib diisi dan tidak boleh kosong" }, { status: 400 });
   }
-  if (!startDate || !endDate) {
+  if (!commitStartDate || !commitEndDate) {
     return NextResponse.json(
-      { error: "startDate dan endDate wajib diisi (format YYYY-MM-DD)" },
+      { error: "commitStartDate dan commitEndDate wajib diisi (format YYYY-MM-DD)" },
       { status: 400 }
     );
   }
@@ -42,17 +42,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Pilih minimal satu repo GitLab" }, { status: 400 });
   }
 
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
+  const start = new Date(`${commitStartDate}T00:00:00`);
+  const end = new Date(`${commitEndDate}T00:00:00`);
   if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
-    return NextResponse.json({ error: "Rentang tanggal tidak valid" }, { status: 400 });
+    return NextResponse.json({ error: "Rentang tanggal commit GitLab tidak valid" }, { status: 400 });
   }
 
   try {
     const result = await generateUraianJadwal({
       scheduled,
-      startDate: start,
-      endDate: end,
+      commitStartDate: start,
+      commitEndDate: end,
       projectRefs,
       logbookEntries: Array.isArray(logbookEntries) ? logbookEntries.slice(0, 500) : undefined,
     });
