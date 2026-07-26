@@ -3,9 +3,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { PATTERN_1, PATTERN_2, Task, KETERANGAN_MAP } from "@/lib/data";
 import { generateSchedule } from "@/lib/scheduler";
+import type { DaySummary } from "@/lib/scheduler";
 import { WeekPicker, getMondayOfWeek, getFridayOfWeek, toLocalISODate } from "@/app/components/WeekPicker";
 import { ProjectPicker } from "@/app/components/ProjectPicker";
 import type { LogbookEntry } from "@/lib/logbook";
+import { downloadXlsx } from "@/lib/excel";
 
 type PatternKey = "1" | "2";
 
@@ -15,7 +17,7 @@ const PATTERNS: Record<PatternKey, Task[]> = {
 };
 
 const LOGBOOK_CACHE_KEY = "logbook-cache-v1";
-const URAIAN_JADWAL_CACHE_KEY = "uraian-jadwal-cache-v1";
+const URAIAN_JADWAL_CACHE_KEY = "uraian-jadwal-cache-v2";
 
 interface UraianRow {
   tanggal: string;
@@ -31,8 +33,10 @@ interface ResultContext {
 }
 
 interface ResultParams {
-  startDate: string;
-  endDate: string;
+  scheduleStartDate: string;
+  scheduleEndDate: string;
+  commitStartDate: string;
+  commitEndDate: string;
   pattern: PatternKey;
   projectRefs: string[];
 }
@@ -40,6 +44,8 @@ interface ResultParams {
 interface UraianJadwalCache extends ResultParams {
   rows: UraianRow[];
   resultContext: ResultContext;
+  daySummaries?: DaySummary[];
+  totalBobot?: number;
 }
 
 interface CachedLogbook {
@@ -120,27 +126,31 @@ function getDayLabel(dateStr: string): string {
   return days[d.getDay()];
 }
 
-function downloadCSV(rows: UraianRow[]) {
-  const header = "Tanggal,Kode Kegiatan,Uraian Aktivitas,Jumlah Output";
-  const csvRows = rows.map(
-    (r) => `${r.tanggal},${r.id},"${r.uraian.replace(/"/g, '""')}",${r.jumlahOutput}`
-  );
-  const csv = [header, ...csvRows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "uraian-jadwal.csv";
-  a.click();
-  URL.revokeObjectURL(url);
+function downloadUraianExcel(rows: UraianRow[]) {
+  return downloadXlsx({
+    filename: "uraian-jadwal.xlsx",
+    sheetName: "Uraian Jadwal",
+    rows,
+    columns: [
+      { header: "Tanggal", value: (row) => row.tanggal, width: 15 },
+      { header: "Kode Kegiatan", value: (row) => row.id, width: 17 },
+      { header: "Uraian Aktivitas", value: (row) => row.uraian, width: 100 },
+      { header: "Jumlah Output", value: (row) => row.jumlahOutput, width: 16 },
+      { header: "Link Bukti (Opsional)", value: () => "", width: 28 },
+    ],
+  });
 }
 
 export default function UraianJadwalPage() {
-  const [startDate, setStartDate] = useState<Date>(() => getMondayOfWeek(new Date()));
-  const [endDate, setEndDate] = useState<Date>(() => getFridayOfWeek(new Date()));
+  const [scheduleStartDate, setScheduleStartDate] = useState<Date>(() => getMondayOfWeek(new Date()));
+  const [scheduleEndDate, setScheduleEndDate] = useState<Date>(() => getFridayOfWeek(new Date()));
+  const [commitStartDate, setCommitStartDate] = useState<Date>(() => getMondayOfWeek(new Date()));
+  const [commitEndDate, setCommitEndDate] = useState<Date>(() => getFridayOfWeek(new Date()));
   const [pattern, setPattern] = useState<PatternKey>("1");
   const [projectRefs, setProjectRefs] = useState<string[]>([]);
   const [rows, setRows] = useState<UraianRow[] | null>(null);
+  const [daySummaries, setDaySummaries] = useState<DaySummary[] | null>(null);
+  const [totalBobot, setTotalBobot] = useState(0);
   const [resultContext, setResultContext] = useState<ResultContext | null>(null);
   const [resultParams, setResultParams] = useState<ResultParams | null>(null);
   const [loading, setLoading] = useState(false);
@@ -156,8 +166,10 @@ export default function UraianJadwalPage() {
 
         const cached = JSON.parse(raw) as UraianJadwalCache;
         if (
-          !cached.startDate ||
-          !cached.endDate ||
+          !cached.scheduleStartDate ||
+          !cached.scheduleEndDate ||
+          !cached.commitStartDate ||
+          !cached.commitEndDate ||
           !(["1", "2"] as string[]).includes(cached.pattern) ||
           !Array.isArray(cached.projectRefs) ||
           !Array.isArray(cached.rows) ||
@@ -168,16 +180,37 @@ export default function UraianJadwalPage() {
         }
 
         const params: ResultParams = {
-          startDate: cached.startDate,
-          endDate: cached.endDate,
+          scheduleStartDate: cached.scheduleStartDate,
+          scheduleEndDate: cached.scheduleEndDate,
+          commitStartDate: cached.commitStartDate,
+          commitEndDate: cached.commitEndDate,
           pattern: cached.pattern,
           projectRefs: cached.projectRefs,
         };
-        setStartDate(new Date(`${cached.startDate}T00:00:00`));
-        setEndDate(new Date(`${cached.endDate}T00:00:00`));
+        const restoredScheduleStart = new Date(`${cached.scheduleStartDate}T00:00:00`);
+        const restoredScheduleEnd = new Date(`${cached.scheduleEndDate}T00:00:00`);
+        const restoredSchedule = generateSchedule(
+          PATTERNS[cached.pattern],
+          restoredScheduleStart,
+          restoredScheduleEnd
+        );
+        setScheduleStartDate(restoredScheduleStart);
+        setScheduleEndDate(restoredScheduleEnd);
+        setCommitStartDate(new Date(`${cached.commitStartDate}T00:00:00`));
+        setCommitEndDate(new Date(`${cached.commitEndDate}T00:00:00`));
         setPattern(cached.pattern);
         setProjectRefs(cached.projectRefs);
         setRows(cached.rows);
+        setDaySummaries(
+          Array.isArray(cached.daySummaries)
+            ? cached.daySummaries
+            : restoredSchedule.daySummaries
+        );
+        setTotalBobot(
+          typeof cached.totalBobot === "number"
+            ? cached.totalBobot
+            : restoredSchedule.totalBobot
+        );
         setResultContext(cached.resultContext);
         setResultParams(params);
       } catch {
@@ -191,22 +224,29 @@ export default function UraianJadwalPage() {
   // Keep successful results and any manual textarea edits cached. Input
   // changes alone do not alter/remove the cached result.
   useEffect(() => {
-    if (!rows || !resultContext || !resultParams) return;
+    if (!rows || !daySummaries || !resultContext || !resultParams) return;
     try {
       const cache: UraianJadwalCache = {
         ...resultParams,
         rows,
+        daySummaries,
+        totalBobot,
         resultContext,
       };
       localStorage.setItem(URAIAN_JADWAL_CACHE_KEY, JSON.stringify(cache));
     } catch {
       // Storage full/unavailable is non-fatal.
     }
-  }, [rows, resultContext, resultParams]);
+  }, [rows, daySummaries, totalBobot, resultContext, resultParams]);
 
-  const handleDateRangeChange = (start: Date, end: Date) => {
-    setStartDate(start);
-    setEndDate(end);
+  const handleScheduleRangeChange = (start: Date, end: Date) => {
+    setScheduleStartDate(start);
+    setScheduleEndDate(end);
+  };
+
+  const handleCommitRangeChange = (start: Date, end: Date) => {
+    setCommitStartDate(start);
+    setCommitEndDate(end);
   };
 
   const updateUraian = useCallback((idx: number, value: string) => {
@@ -227,22 +267,35 @@ export default function UraianJadwalPage() {
       // Storage unavailable — state is still cleared below.
     }
     setRows(null);
+    setDaySummaries(null);
+    setTotalBobot(0);
     setResultContext(null);
     setResultParams(null);
     setLoading(true);
     setError(null);
     try {
-      const { scheduled } = generateSchedule(PATTERNS[pattern], startDate, endDate);
-      const startDateString = toLocalISODate(startDate);
-      const endDateString = toLocalISODate(endDate);
-      const logbookEntries = matchingCachedLogbook(startDateString, endDateString, projectRefs);
+      const scheduleResult = generateSchedule(
+        PATTERNS[pattern],
+        scheduleStartDate,
+        scheduleEndDate
+      );
+      const { scheduled } = scheduleResult;
+      const scheduleStartDateString = toLocalISODate(scheduleStartDate);
+      const scheduleEndDateString = toLocalISODate(scheduleEndDate);
+      const commitStartDateString = toLocalISODate(commitStartDate);
+      const commitEndDateString = toLocalISODate(commitEndDate);
+      const logbookEntries = matchingCachedLogbook(
+        commitStartDateString,
+        commitEndDateString,
+        projectRefs
+      );
       const res = await fetch("/api/uraian-jadwal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scheduled,
-          startDate: startDateString,
-          endDate: endDateString,
+          commitStartDate: commitStartDateString,
+          commitEndDate: commitEndDateString,
           projectRefs,
           logbookEntries,
         }),
@@ -251,13 +304,17 @@ export default function UraianJadwalPage() {
       if (!res.ok) throw new Error(data.error || "Gagal generate uraian jadwal");
       const sorted = [...(data.rows as UraianRow[])].sort((a, b) => a.id - b.id || a.tanggal.localeCompare(b.tanggal));
       setRows(sorted);
+      setDaySummaries(scheduleResult.daySummaries);
+      setTotalBobot(scheduleResult.totalBobot);
       setResultContext({
         entryCount: data.contextEntryCount,
         source: data.contextSource,
       });
       setResultParams({
-        startDate: startDateString,
-        endDate: endDateString,
+        scheduleStartDate: scheduleStartDateString,
+        scheduleEndDate: scheduleEndDateString,
+        commitStartDate: commitStartDateString,
+        commitEndDate: commitEndDateString,
         pattern,
         projectRefs: [...projectRefs],
       });
@@ -266,13 +323,13 @@ export default function UraianJadwalPage() {
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate, pattern, projectRefs]);
+  }, [scheduleStartDate, scheduleEndDate, commitStartDate, commitEndDate, pattern, projectRefs]);
 
   const manualCount = rows?.filter((r) => r.uraian.trim() === "").length ?? 0;
 
   return (
-    <main className="min-h-screen bg-gray-50 py-10 px-4">
-      <div className="max-w-[1800px] mx-auto space-y-8">
+    <main className="min-h-screen bg-slate-200 py-10">
+      <div className="w-[80%] mx-auto space-y-8">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Generate Uraian Jadwal</h1>
           <p className="text-sm text-gray-500 mt-1">
@@ -280,19 +337,34 @@ export default function UraianJadwalPage() {
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow p-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-slate-50 border border-slate-300 rounded-2xl shadow-lg shadow-slate-900/10 p-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                Minggu Kerja
+                Rentang Jadwal Task
               </label>
-              <WeekPicker startDate={startDate} endDate={endDate} onChange={handleDateRangeChange} />
+              <WeekPicker
+                startDate={scheduleStartDate}
+                endDate={scheduleEndDate}
+                onChange={handleScheduleRangeChange}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                Rentang Commit GitLab
+              </label>
+              <WeekPicker
+                startDate={commitStartDate}
+                endDate={commitEndDate}
+                onChange={handleCommitRangeChange}
+                selectionMode="range"
+              />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
                 Pattern
               </label>
-              <div className="flex rounded-lg border border-gray-300 overflow-hidden h-[38px]">
+              <div className="w-full h-10 flex rounded-lg border border-gray-300 overflow-hidden">
                 {(["1", "2"] as PatternKey[]).map((p) => (
                   <button
                     key={p}
@@ -337,9 +409,30 @@ export default function UraianJadwalPage() {
           </div>
         )}
 
+        {daySummaries && (
+          <div className="bg-slate-50 border border-slate-300 rounded-2xl shadow-lg shadow-slate-900/10 p-4 flex flex-wrap gap-4 items-center justify-between">
+            <div className="flex flex-wrap gap-6">
+              {daySummaries.map((summary) => (
+                <div key={summary.tanggal} className="text-center">
+                  <p className="text-xs text-gray-500 font-medium">
+                    {getDayLabel(summary.tanggal)}
+                  </p>
+                  <p className="text-xs text-gray-400">{summary.tanggal}</p>
+                  <p className="text-lg font-bold text-blue-600">{summary.totalBobot}</p>
+                </div>
+              ))}
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-gray-500 font-medium">Total Bobot</p>
+              <p className="text-2xl font-bold text-gray-800">{totalBobot}</p>
+              <p className="text-xs text-gray-400">maks 27.5</p>
+            </div>
+          </div>
+        )}
+
         {rows && (
-          <div className="bg-white rounded-2xl shadow overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="bg-slate-50 border border-slate-300 rounded-2xl shadow-lg shadow-slate-900/10 overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <div>
                 <h2 className="text-base font-semibold text-gray-700">Uraian Jadwal ({rows.length} baris)</h2>
                 {resultContext && (
@@ -348,6 +441,8 @@ export default function UraianJadwalPage() {
                     {resultContext.source === "logbook-cache"
                       ? " hasil Generate Logbook yang tersimpan."
                       : " yang dibuat dari perubahan GitLab."}
+                    {resultParams &&
+                      ` Rentang commit ${resultParams.commitStartDate} sampai ${resultParams.commitEndDate}.`}
                   </p>
                 )}
                 {manualCount > 0 && (
@@ -357,35 +452,32 @@ export default function UraianJadwalPage() {
                 )}
               </div>
               <button
-                onClick={() => downloadCSV(rows)}
+                onClick={() => void downloadUraianExcel(rows)}
                 className="bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg px-4 py-2 transition-colors"
               >
-                Download CSV
+                Download Excel
               </button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-100">
+                <thead className="bg-slate-200/70 border-b border-slate-300">
                   <tr>
                     <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">#</th>
                     <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tanggal</th>
-                    <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Kode Kegiatan</th>
                     <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Keterangan</th>
                     <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Uraian Aktivitas</th>
-                    <th className="text-right px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Jumlah Output</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-slate-200">
                   {rows.map((r, idx) => {
                     const isEmpty = r.uraian.trim() === "";
                     return (
-                      <tr key={idx} className={["hover:bg-gray-50 transition-colors align-top", isEmpty ? "bg-amber-50/60" : ""].join(" ")}>
+                      <tr key={idx} className={["hover:bg-slate-100 transition-colors align-top", isEmpty ? "bg-amber-50/60" : ""].join(" ")}>
                         <td className="px-6 py-3 text-gray-400">{idx + 1}</td>
                         <td className="px-6 py-3 text-gray-600">
                           <span className="font-mono">{r.tanggal}</span>
                           <span className="block text-xs text-gray-400">{getDayLabel(r.tanggal)}</span>
                         </td>
-                        <td className="px-6 py-3 font-medium text-gray-800">{r.id}</td>
                         <td className="px-6 py-3 text-gray-500 text-xs max-w-xs">{KETERANGAN_MAP[r.id] ?? ""}</td>
                         <td className="px-3 py-2 min-w-[420px]">
                           <AutoGrowTextarea
@@ -399,7 +491,6 @@ export default function UraianJadwalPage() {
                             ].join(" ")}
                           />
                         </td>
-                        <td className="px-6 py-3 text-right text-gray-700">{r.jumlahOutput}</td>
                       </tr>
                     );
                   })}
