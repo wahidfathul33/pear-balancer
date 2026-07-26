@@ -1,36 +1,43 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Generate PEAR
 
-## Getting Started
+Aplikasi Next.js untuk membuat jadwal dan uraian aktivitas dari rentang tanggal serta commit GitLab.
 
-First, run the development server:
+## Menjalankan di lokal
+
+Salin `.env.example` menjadi `.env.local`, isi kredensial AI dan GitLab, lalu jalankan:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Buka [http://localhost:3000](http://localhost:3000). Perubahan source akan dimuat ulang otomatis oleh Next.js.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Untuk menghentikan server, tekan `Ctrl+C` pada terminal yang menjalankan `npm run dev`. Jika terminalnya sudah tertutup tetapi port masih dipakai:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+lsof -ti :3000 | xargs kill
+```
 
-## Learn More
+## GPT-5.4 Mini
 
-To learn more about Next.js, take a look at the following resources:
+Model hemat yang direkomendasikan adalah GPT-5.4 Mini. Konfigurasi OpenAI langsung:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```env
+AI_BASE_URL=https://api.openai.com/v1
+AI_API_KEY=sk-...
+AI_MODEL=gpt-5.4-mini
+AI_REASONING_EFFORT=none
+AI_MAX_COMPLETION_TOKENS=16384
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Jika memakai OpenRouter, gunakan `AI_BASE_URL=https://openrouter.ai/api/v1` dan model `openai/gpt-5.4-mini`. Untuk proxy lokal yang memakai alias model, biarkan `AI_MODEL` sesuai alias proxy dan set `AI_REASONING_EFFORT=none` apabila proxy meneruskan parameter OpenAI tersebut.
 
-## Deploy on Vercel
+Client tetap memakai endpoint Chat Completions agar kompatibel dengan OpenAI maupun endpoint OpenAI-compatible. Pada GPT-5.4 Mini, aplikasi tidak mengirim `temperature`, memakai reasoning `none` untuk menghemat token, dan membatasi output secara default. Naikkan `AI_MAX_COMPLETION_TOKENS` bila respons terpotong; untuk rentang commit yang sangat besar, memperbesar context model saja tetap tidak menggantikan batching.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Deploy ke Vercel
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Aplikasi aman dijalankan di Vercel selama seluruh nilai `.env.local` dimasukkan sebagai Environment Variables di pengaturan project dan file `.env*` tidak di-commit. Build production dapat diperiksa dengan:
+
+```bash
+npm run build
+```

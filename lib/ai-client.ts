@@ -10,11 +10,50 @@ export interface ChatMessage {
   content: string;
 }
 
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
+
 export interface AiConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  reasoningEffort?: ReasoningEffort;
+  maxCompletionTokens?: number;
   extraHeaders: Record<string, string>;
+}
+
+export interface ChatCompleteOptions {
+  temperature?: number;
+  jsonObject?: boolean;
+  reasoningEffort?: ReasoningEffort;
+  maxCompletionTokens?: number;
+}
+
+function isGpt54Mini(model: string): boolean {
+  const modelId = model.toLowerCase().split("/").pop() || "";
+  return modelId === "gpt-5.4-mini" || modelId.startsWith("gpt-5.4-mini-");
+}
+
+function readReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  if (!value) return undefined;
+
+  const normalized = value.trim().toLowerCase();
+  if (["none", "low", "medium", "high", "xhigh"].includes(normalized)) {
+    return normalized as ReasoningEffort;
+  }
+
+  throw new Error(
+    "AI_REASONING_EFFORT tidak valid. Gunakan: none, low, medium, high, atau xhigh"
+  );
+}
+
+function readPositiveInteger(name: string, value: string | undefined): number | undefined {
+  if (!value) return undefined;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} harus berupa bilangan bulat positif`);
+  }
+  return parsed;
 }
 
 export function loadAiConfigFromEnv(): AiConfig {
@@ -23,7 +62,16 @@ export function loadAiConfigFromEnv(): AiConfig {
   if (!apiKey) {
     throw new Error("AI_API_KEY belum di-set di .env (kredensial endpoint AI)");
   }
-  const model = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || "openai/gpt-5.6-terra";
+  const defaultModel = baseUrl.includes("openrouter.ai")
+    ? "openai/gpt-5.4-mini"
+    : "gpt-5.4-mini";
+  const model = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || defaultModel;
+  const reasoningEffort =
+    readReasoningEffort(process.env.AI_REASONING_EFFORT) ||
+    (isGpt54Mini(model) ? "none" : undefined);
+  const maxCompletionTokens =
+    readPositiveInteger("AI_MAX_COMPLETION_TOKENS", process.env.AI_MAX_COMPLETION_TOKENS) ||
+    (isGpt54Mini(model) ? 16_384 : undefined);
 
   // OpenRouter-specific attribution headers; harmless to omit for other
   // providers, so only send them when explicitly configured.
@@ -31,7 +79,14 @@ export function loadAiConfigFromEnv(): AiConfig {
   if (process.env.AI_SITE_URL) extraHeaders["HTTP-Referer"] = process.env.AI_SITE_URL;
   if (process.env.AI_SITE_NAME) extraHeaders["X-Title"] = process.env.AI_SITE_NAME;
 
-  return { baseUrl, apiKey, model, extraHeaders };
+  return {
+    baseUrl,
+    apiKey,
+    model,
+    reasoningEffort,
+    maxCompletionTokens,
+    extraHeaders,
+  };
 }
 
 /**
@@ -69,8 +124,17 @@ function tryParseSseBody(body: string): string | null {
 export async function chatComplete(
   config: AiConfig,
   messages: ChatMessage[],
-  opts?: { temperature?: number; jsonObject?: boolean }
+  opts?: ChatCompleteOptions
 ): Promise<string> {
+  const reasoningEffort = opts?.reasoningEffort ?? config.reasoningEffort;
+  const maxCompletionTokens = opts?.maxCompletionTokens ?? config.maxCompletionTokens;
+
+  // GPT-5.4 Mini is a reasoning model. Omit sampling controls while reasoning
+  // controls are active, and use effort `none` by default to minimize cost.
+  const modelOptions = reasoningEffort
+    ? { reasoning_effort: reasoningEffort }
+    : { temperature: opts?.temperature ?? 0.3 };
+
   const res = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -81,8 +145,9 @@ export async function chatComplete(
     body: JSON.stringify({
       model: config.model,
       messages,
-      temperature: opts?.temperature ?? 0.3,
       stream: false,
+      ...modelOptions,
+      ...(maxCompletionTokens ? { max_completion_tokens: maxCompletionTokens } : {}),
       ...(opts?.jsonObject ? { response_format: { type: "json_object" } } : {}),
     }),
   });
@@ -105,10 +170,26 @@ export async function chatComplete(
     );
   }
 
-  const content: string | undefined = (data as { choices?: { message?: { content?: string } }[] })
-    ?.choices?.[0]?.message?.content;
+  const choice = (
+    data as {
+      choices?: {
+        finish_reason?: string | null;
+        message?: { content?: string | null; refusal?: string | null };
+      }[];
+    }
+  )?.choices?.[0];
+  const content = choice?.message?.content;
   if (!content) {
-    throw new Error("Endpoint AI mengembalikan respons kosong");
+    const detail = [
+      `model=${config.model}`,
+      choice?.finish_reason ? `finish_reason=${choice.finish_reason}` : null,
+      choice?.message?.refusal ? `refusal=${choice.message.refusal}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(
+      `Endpoint AI mengembalikan respons kosong${detail ? ` (${detail})` : ""}`
+    );
   }
   return content;
 }
