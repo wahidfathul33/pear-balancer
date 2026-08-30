@@ -14,6 +14,7 @@ import type { DaySummary } from "@/lib/scheduler";
 import { WeekPicker, getMondayOfWeek, getFridayOfWeek, toLocalISODate } from "@/app/components/WeekPicker";
 import { ProjectPicker } from "@/app/components/ProjectPicker";
 import { PatternEditor } from "@/app/components/PatternEditor";
+import { ScheduleDayToggles, getScheduleWorkDates } from "@/app/components/ScheduleDayToggles";
 import type { LogbookEntry } from "@/lib/logbook";
 import { downloadXlsx } from "@/lib/excel";
 
@@ -47,6 +48,7 @@ interface ResultParams {
   commitEndDate: string;
   pattern: PatternKey;
   projectRefs: string[];
+  excludedScheduleDates: string[];
 }
 
 interface UraianJadwalCache extends ResultParams {
@@ -158,6 +160,7 @@ export default function UraianJadwalPage() {
   const [patternRows, setPatternRows] = useState<PatternRow[]>(() => clonePattern(DEFAULT_PATTERNS["1"]));
   const [maxBobot, setMaxBobot] = useState<number>(DEFAULT_MAX_BOBOT);
   const [projectRefs, setProjectRefs] = useState<string[]>([]);
+  const [excludedScheduleDates, setExcludedScheduleDates] = useState<string[]>([]);
   const [rows, setRows] = useState<UraianRow[] | null>(null);
   const [daySummaries, setDaySummaries] = useState<DaySummary[] | null>(null);
   const [totalBobot, setTotalBobot] = useState(0);
@@ -196,13 +199,16 @@ export default function UraianJadwalPage() {
           commitEndDate: cached.commitEndDate,
           pattern: cached.pattern,
           projectRefs: cached.projectRefs,
+          excludedScheduleDates: cached.excludedScheduleDates ?? [],
         };
         const restoredScheduleStart = new Date(`${cached.scheduleStartDate}T00:00:00`);
         const restoredScheduleEnd = new Date(`${cached.scheduleEndDate}T00:00:00`);
         const restoredSchedule = generateSchedule(
           expandPattern(DEFAULT_PATTERNS[cached.pattern]),
           restoredScheduleStart,
-          restoredScheduleEnd
+          restoredScheduleEnd,
+          DEFAULT_MAX_BOBOT,
+          cached.excludedScheduleDates ?? []
         );
         setScheduleStartDate(restoredScheduleStart);
         setScheduleEndDate(restoredScheduleEnd);
@@ -211,6 +217,7 @@ export default function UraianJadwalPage() {
         setPattern(cached.pattern);
         setPatternRows(clonePattern(DEFAULT_PATTERNS[cached.pattern]));
         setProjectRefs(cached.projectRefs);
+        setExcludedScheduleDates(cached.excludedScheduleDates ?? []);
         setRows(cached.rows);
         setDaySummaries(
           Array.isArray(cached.daySummaries)
@@ -253,6 +260,7 @@ export default function UraianJadwalPage() {
   const handleScheduleRangeChange = (start: Date, end: Date) => {
     setScheduleStartDate(start);
     setScheduleEndDate(end);
+    setExcludedScheduleDates([]);
   };
 
   const handleCommitRangeChange = (start: Date, end: Date) => {
@@ -294,7 +302,8 @@ export default function UraianJadwalPage() {
         expandPattern(patternRows),
         scheduleStartDate,
         scheduleEndDate,
-        maxBobot
+        maxBobot,
+        excludedScheduleDates
       );
       const { scheduled } = scheduleResult;
       const scheduleStartDateString = toLocalISODate(scheduleStartDate);
@@ -334,15 +343,18 @@ export default function UraianJadwalPage() {
         commitEndDate: commitEndDateString,
         pattern,
         projectRefs: [...projectRefs],
+        excludedScheduleDates: [...excludedScheduleDates],
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan tidak diketahui");
     } finally {
       setLoading(false);
     }
-  }, [scheduleStartDate, scheduleEndDate, commitStartDate, commitEndDate, pattern, patternRows, maxBobot, projectRefs]);
+  }, [scheduleStartDate, scheduleEndDate, commitStartDate, commitEndDate, pattern, patternRows, maxBobot, projectRefs, excludedScheduleDates]);
 
   const manualCount = rows?.filter((r) => r.uraian.trim() === "").length ?? 0;
+  const activeScheduleDayCount = getScheduleWorkDates(scheduleStartDate, scheduleEndDate)
+    .filter((date) => !excludedScheduleDates.includes(toLocalISODate(date))).length;
 
   return (
     <main className="min-h-screen bg-slate-200 py-10">
@@ -406,6 +418,12 @@ export default function UraianJadwalPage() {
               <ProjectPicker selected={projectRefs} onChange={setProjectRefs} />
             </div>
           </div>
+          <ScheduleDayToggles
+            startDate={scheduleStartDate}
+            endDate={scheduleEndDate}
+            excludedDates={excludedScheduleDates}
+            onChange={setExcludedScheduleDates}
+          />
           <div className="mt-4">
             <PatternEditor
               rows={patternRows}
@@ -418,13 +436,16 @@ export default function UraianJadwalPage() {
           <div className="mt-4 flex items-center gap-3">
             <button
               onClick={handleGenerate}
-              disabled={loading || projectRefs.length === 0}
+              disabled={loading || projectRefs.length === 0 || activeScheduleDayCount === 0}
               className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-semibold rounded-lg px-6 py-2 text-sm transition-colors"
             >
               {loading ? "Menyusun jadwal & uraian…" : rows ? "Generate Ulang" : "Generate"}
             </button>
             {projectRefs.length === 0 && (
               <p className="text-xs text-gray-400">Pilih minimal satu repo dulu.</p>
+            )}
+            {activeScheduleDayCount === 0 && (
+              <p className="text-xs text-red-600">Aktifkan minimal satu hari jadwal.</p>
             )}
           </div>
         </div>

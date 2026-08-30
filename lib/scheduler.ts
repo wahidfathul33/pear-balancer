@@ -51,7 +51,11 @@ function toDateString(d: Date): string {
 }
 
 /** Get Mon–Fri dates within [startDate, endDate] inclusive */
-function getWorkDays(startDate: Date, endDate: Date): Date[] {
+function getWorkDays(
+  startDate: Date,
+  endDate: Date,
+  excludedDates: ReadonlySet<string>
+): Date[] {
   const days: Date[] = [];
   const cur = new Date(
     startDate.getFullYear(),
@@ -65,7 +69,9 @@ function getWorkDays(startDate: Date, endDate: Date): Date[] {
   );
   while (cur <= end) {
     const dow = cur.getDay();
-    if (dow >= 1 && dow <= 5) days.push(new Date(cur));
+    if (dow >= 1 && dow <= 5 && !excludedDates.has(toDateString(cur))) {
+      days.push(new Date(cur));
+    }
     cur.setDate(cur.getDate() + 1);
   }
   return days;
@@ -120,7 +126,8 @@ export function generateSchedule(
   tasks: Task[],
   startDate: Date,
   endDate: Date,
-  maxBobot: number = DEFAULT_MAX_BOBOT
+  maxBobot: number = DEFAULT_MAX_BOBOT,
+  excludedDates: readonly string[] = []
 ): {
   scheduled: ScheduledTask[];
   daySummaries: DaySummary[];
@@ -170,8 +177,11 @@ export function generateSchedule(
   const sortedTasks = [...mainTasks, ...fillerTasks];
 
   // ── 3. Get work days ────────────────────────────────────────────────────
-  const workDays = getWorkDays(startDate, endDate);
-  const numDays = workDays.length || 1;
+  const workDays = getWorkDays(startDate, endDate, new Set(excludedDates));
+  if (workDays.length === 0) {
+    return { scheduled: [], daySummaries: [], totalBobot: 0 };
+  }
+  const numDays = workDays.length;
   const dayBobots: number[] = new Array(numDays).fill(0);
 
   // ── 4. Assign each task using affinity + spread aware score ────────────
